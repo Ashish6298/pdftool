@@ -1,0 +1,102 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id        String    @id @default(uuid())
+  email     String    @unique
+  name      String?
+  projects  Project[]
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+}
+
+model Project {
+  id            String         @id @default(uuid())
+  name          String
+  userId        String?
+  user          User?          @relation(fields: [userId], references: [id])
+  uploadedFile  UploadedFile?
+  overlays      OverlayField[]
+  exports       ExportFile[]
+  versions      ProjectVersion[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
+}
+
+model UploadedFile {
+  id           String   @id @default(uuid())
+  projectId    String   @unique
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  filename     String
+  mimeType     String
+  fileSize     Int
+  storagePath  String   // UUID-based path in storage/
+  checksum     String
+  createdAt    DateTime @default(now())
+}
+
+enum OverlayType {
+  TEXT
+  NOTE
+  SIGNATURE
+  STAMP
+  CHECKBOX
+  DATE
+}
+
+model OverlayField {
+  id          String      @id @default(uuid())
+  projectId   String
+  project     Project     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  pageNumber  Int
+  type        OverlayType
+  textContent String?     @db.Text
+  
+  // Coordinates are stored as normalized values relative to original PDF width/height
+  x           Float
+  y           Float
+  width       Float
+  height      Float
+  rotation    Float       @default(0.0)
+  
+  // Styling
+  fontSize    Int         @default(12)
+  fontFamily  String      @default("Helvetica")
+  fontColor   String      @default("#000000")
+  bold        Boolean     @default(false)
+  italic      Boolean     @default(false)
+  underline   Boolean     @default(false)
+  alignment   String      @default("left") // left, center, right
+  opacity     Float       @default(1.0)
+  locked      Boolean     @default(false)
+  zIndex      Int         @default(1)
+  
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+}
+
+model ExportFile {
+  id           String   @id @default(uuid())
+  projectId    String
+  project      Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version      Int
+  filename     String
+  storagePath  String
+  metadata     Json?
+  createdAt    DateTime @default(now())
+}
+
+model ProjectVersion {
+  id          String   @id @default(uuid())
+  projectId   String
+  project     Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  version     Int
+  overlays    Json
+  createdAt   DateTime @default(now())
+}
