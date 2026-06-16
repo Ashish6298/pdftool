@@ -29,6 +29,13 @@ export interface EmptyRegion {
   width: number;
   height: number;
   maxCharacters: number;
+  kind?: 'WHITESPACE' | 'BLANK_LINE';
+}
+
+interface VerticalCut {
+  x: number;
+  y: number;
+  height: number;
 }
 
 export interface PageAnalysis {
@@ -56,6 +63,15 @@ function estimateCharacterCapacity(
   const charactersPerLine = Math.floor(Math.max(0, widthPoints - 8) / (fontSize * 0.52));
   const lineCount = Math.floor(Math.max(0, heightPoints - 6) / (fontSize * 1.35));
   return Math.max(0, charactersPerLine * lineCount);
+}
+
+function estimateSingleLineCapacity(
+  region: Pick<EmptyRegion, 'width'>,
+  pageWidth: number,
+  fontSize = 10
+): number {
+  const widthPoints = (region.width / 100) * pageWidth;
+  return Math.floor(Math.max(0, widthPoints - 4) / (fontSize * 0.52));
 }
 
 function findEmptyRegions(
@@ -184,6 +200,300 @@ function findEmptyRegions(
 
   return selected.map((region) => ({
     ...region,
+    kind: 'WHITESPACE',
+    x: Number(region.x.toFixed(2)),
+    y: Number(region.y.toFixed(2)),
+    width: Number(region.width.toFixed(2)),
+    height: Number(region.height.toFixed(2)),
+  }));
+}
+
+function rectanglesOverlap(
+  first: { x: number; y: number; width: number; height: number },
+  second: { x: number; y: number; width: number; height: number }
+): boolean {
+  return (
+    first.x < second.x + second.width &&
+    first.x + first.width > second.x &&
+    first.y < second.y + second.height &&
+    first.y + first.height > second.y
+  );
+}
+
+function splitRegionAroundLabelText(region: EmptyRegion, textBlocks: TextBox[], verticalCuts: VerticalCut[]): EmptyRegion[] {
+  let segments = [{ left: region.x, right: region.x + region.width }];
+
+  for (const block of textBlocks) {
+    const protectedBlock = {
+      x: Math.max(0, block.x - 0.15),
+      y: Math.max(0, block.y - 0.15),
+      width: block.width + 0.3,
+      height: block.height + 0.3,
+    };
+
+    if (!rectanglesOverlap(region, protectedBlock)) continue;
+
+    const blockLeft = protectedBlock.x - 0.35;
+    const blockRight = protectedBlock.x + protectedBlock.width + 0.35;
+    segments = segments.flatMap((segment) => {
+      if (blockRight <= segment.left || blockLeft >= segment.right) {
+        return [segment];
+      }
+
+      const nextSegments: { left: number; right: number }[] = [];
+      if (blockLeft - segment.left >= 3) {
+        nextSegments.push({ left: segment.left, right: blockLeft });
+      }
+      if (segment.right - blockRight >= 3) {
+        nextSegments.push({ left: blockRight, right: segment.right });
+      }
+      return nextSegments;
+    });
+  }
+
+  for (const cut of verticalCuts) {
+    const cutOverlapsY =
+      cut.y < region.y + region.height + 0.4 &&
+      cut.y + cut.height > region.y - 0.4;
+    if (!cutOverlapsY) continue;
+
+    segments = segments.flatMap((segment) => {
+      if (cut.x <= segment.left + 2 || cut.x >= segment.right - 2) {
+        return [segment];
+      }
+      return [
+        { left: segment.left, right: cut.x },
+        { left: cut.x, right: segment.right },
+      ].filter((nextSegment) => nextSegment.right - nextSegment.left >= 3);
+    });
+  }
+
+  return segments.map((segment) => ({
+    ...region,
+    x: segment.left,
+    width: segment.right - segment.left,
+  }));
+}
+
+function createBlankLineRegions(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  viewport: any,
+  textBlocks: TextBox[],
+  verticalCuts: VerticalCut[]
+): EmptyRegion[] {
+  const [viewX1, viewY1] = viewport.convertToViewportPoint(x1, y1);
+  const [viewX2, viewY2] = viewport.convertToViewportPoint(x2, y2);
+  const lineWidth = Math.abs(viewX2 - viewX1);
+  const lineHeight = Math.abs(viewY2 - viewY1);
+
+  if (lineWidth < viewport.width * 0.035 || lineHeight > viewport.height * 0.01) {
+    return [];
+  }
+
+  const fieldHeight = Math.max(1.45, Math.min(1.8, (13 / viewport.height) * 100));
+  const lineY = (Math.min(viewY1, viewY2) / viewport.height) * 100;
+  const region: EmptyRegion = {
+    x: (Math.min(viewX1, viewX2) / viewport.width) * 100,
+    y: Math.max(0, lineY - fieldHeight + 0.15),
+    width: (lineWidth / viewport.width) * 100,
+    height: fieldHeight,
+    maxCharacters: 0,
+    kind: 'BLANK_LINE',
+  };
+
+  if (region.x < 2 || region.x + region.width > 98 || region.y < 2 || region.y + region.height > 98) {
+    return [];
+  }
+
+  return splitRegionAroundLabelText(region, textBlocks, verticalCuts)
+    .map((splitRegion) => ({
+      ...splitRegion,
+      maxCharacters: estimateSingleLineCapacity(splitRegion, viewport.width),
+    }))
+    .filter((splitRegion) => splitRegion.maxCharacters >= 2);
+}
+
+function createVerticalCut(
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+  viewport: any
+): VerticalCut | null {
+  const [viewX1, viewY1] = viewport.convertToViewportPoint(x1, y1);
+  const [viewX2, viewY2] = viewport.convertToViewportPoint(x2, y2);
+  const cutWidth = Math.abs(viewX2 - viewX1);
+  const cutHeight = Math.abs(viewY2 - viewY1);
+
+  if (cutWidth > viewport.width * 0.01 || cutHeight < viewport.height * 0.01) {
+    return null;
+  }
+
+  return {
+    x: (Math.min(viewX1, viewX2) / viewport.width) * 100,
+    y: (Math.min(viewY1, viewY2) / viewport.height) * 100,
+    height: (cutHeight / viewport.height) * 100,
+  };
+}
+
+function findVerticalCuts(operatorList: any, viewport: any): VerticalCut[] {
+  const cuts: VerticalCut[] = [];
+
+  for (let index = 0; index < operatorList.fnArray.length; index++) {
+    if (operatorList.fnArray[index] !== pdfjs.OPS.constructPath) continue;
+
+    const [pathOps, pathArgs] = operatorList.argsArray[index] || [];
+    if (!Array.isArray(pathOps) || !Array.isArray(pathArgs)) continue;
+
+    let argIndex = 0;
+    let currentPoint: { x: number; y: number } | null = null;
+    for (const pathOp of pathOps) {
+      if (pathOp === pdfjs.OPS.moveTo) {
+        currentPoint = {
+          x: pathArgs[argIndex++],
+          y: pathArgs[argIndex++],
+        };
+      } else if (pathOp === pdfjs.OPS.lineTo) {
+        const nextPoint = {
+          x: pathArgs[argIndex++],
+          y: pathArgs[argIndex++],
+        };
+        if (currentPoint) {
+          const cut = createVerticalCut(currentPoint.x, currentPoint.y, nextPoint.x, nextPoint.y, viewport);
+          if (cut) cuts.push(cut);
+        }
+        currentPoint = nextPoint;
+      } else if (pathOp === pdfjs.OPS.rectangle) {
+        const x = pathArgs[argIndex++];
+        const y = pathArgs[argIndex++];
+        const width = pathArgs[argIndex++];
+        const height = pathArgs[argIndex++];
+        const cut = createVerticalCut(x, y, x, y + height, viewport);
+        if (width <= 1 && cut) cuts.push(cut);
+      }
+    }
+  }
+
+  return cuts;
+}
+
+function findLabelGapRegions(
+  textBlocks: TextBox[],
+  pageWidth: number
+): EmptyRegion[] {
+  const regions: EmptyRegion[] = [];
+
+  for (const block of textBlocks) {
+    const text = block.text.trim();
+    if (!text.endsWith(':') || block.y < 25 || block.width > 45) continue;
+
+    const sameLineBlocks = textBlocks.filter((other) =>
+      other !== block &&
+      Math.abs((other.y + other.height / 2) - (block.y + block.height / 2)) < 0.8 &&
+      other.x > block.x + block.width
+    );
+
+    const nextTextX = sameLineBlocks.length > 0
+      ? Math.min(...sameLineBlocks.map((other) => other.x))
+      : 92;
+    const x = block.x + block.width + 0.6;
+    const width = nextTextX - x - 0.6;
+
+    if (width < 5) continue;
+
+    regions.push({
+      x,
+      y: block.y,
+      width,
+      height: Math.max(1.45, Math.min(1.8, block.height + 0.3)),
+      maxCharacters: estimateSingleLineCapacity({ width }, pageWidth),
+      kind: 'BLANK_LINE',
+    });
+  }
+
+  return regions.filter((region) => region.maxCharacters >= 2);
+}
+
+function findBlankLineRegions(
+  operatorList: any,
+  viewport: any,
+  textBlocks: TextBox[]
+): EmptyRegion[] {
+  const regions: EmptyRegion[] = findLabelGapRegions(textBlocks, viewport.width);
+  const verticalCuts = findVerticalCuts(operatorList, viewport);
+
+  for (let index = 0; index < operatorList.fnArray.length; index++) {
+    if (operatorList.fnArray[index] !== pdfjs.OPS.constructPath) continue;
+
+    const [pathOps, pathArgs] = operatorList.argsArray[index] || [];
+    if (!Array.isArray(pathOps) || !Array.isArray(pathArgs)) continue;
+
+    let argIndex = 0;
+    let currentPoint: { x: number; y: number } | null = null;
+    for (const pathOp of pathOps) {
+      if (pathOp === pdfjs.OPS.moveTo) {
+        currentPoint = {
+          x: pathArgs[argIndex++],
+          y: pathArgs[argIndex++],
+        };
+      } else if (pathOp === pdfjs.OPS.lineTo) {
+        const nextPoint = {
+          x: pathArgs[argIndex++],
+          y: pathArgs[argIndex++],
+        };
+        if (currentPoint) {
+          const lineRegions = createBlankLineRegions(
+            currentPoint.x,
+            currentPoint.y,
+            nextPoint.x,
+            nextPoint.y,
+            viewport,
+            textBlocks,
+            verticalCuts
+          );
+          regions.push(...lineRegions);
+        }
+        currentPoint = nextPoint;
+      } else if (pathOp === pdfjs.OPS.rectangle) {
+        const x = pathArgs[argIndex++];
+        const y = pathArgs[argIndex++];
+        const width = pathArgs[argIndex++];
+        const height = pathArgs[argIndex++];
+        if (height > 1 || width < viewport.width * 0.06) continue;
+
+        const lineRegions = createBlankLineRegions(x, y + height, x + width, y + height, viewport, textBlocks, verticalCuts);
+        regions.push(...lineRegions);
+      }
+    }
+  }
+
+  const selected: EmptyRegion[] = [];
+  for (const region of regions.sort((a, b) => a.y - b.y || a.x - b.x)) {
+    const duplicate = selected.some((existing) => {
+      const intersectionWidth = Math.max(
+        0,
+        Math.min(region.x + region.width, existing.x + existing.width) -
+          Math.max(region.x, existing.x)
+      );
+      const intersectionHeight = Math.max(
+        0,
+        Math.min(region.y + region.height, existing.y + existing.height) -
+          Math.max(region.y, existing.y)
+      );
+      const intersectionArea = intersectionWidth * intersectionHeight;
+      const smallerArea = Math.min(region.width * region.height, existing.width * existing.height);
+      return smallerArea > 0 && intersectionArea / smallerArea > 0.65;
+    });
+
+    if (!duplicate) selected.push(region);
+    if (selected.length === 80) break;
+  }
+
+  return selected.map((region) => ({
+    ...region,
     x: Number(region.x.toFixed(2)),
     y: Number(region.y.toFixed(2)),
     width: Number(region.width.toFixed(2)),
@@ -204,6 +514,7 @@ export async function analyzePDF(filePath: string): Promise<AnalysisResult> {
     const page = await pdfDocument.getPage(pageNum);
     const viewport = page.getViewport({ scale: 1.0 });
     const textContent = await page.getTextContent();
+    const operatorList = await page.getOperatorList();
     
     const textBlocks: TextBox[] = [];
     
@@ -285,7 +596,9 @@ export async function analyzePDF(filePath: string): Promise<AnalysisResult> {
       }
     }
 
-    const emptyRegions = findEmptyRegions(textBlocks, viewport.width, viewport.height);
+    const whitespaceRegions = findEmptyRegions(textBlocks, viewport.width, viewport.height);
+    const blankLineRegions = findBlankLineRegions(operatorList, viewport, textBlocks);
+    const emptyRegions = [...whitespaceRegions, ...blankLineRegions];
 
     pages.push({
       pageNumber: pageNum,

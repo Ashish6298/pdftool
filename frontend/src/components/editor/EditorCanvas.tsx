@@ -138,13 +138,25 @@ export default function EditorCanvas({ projectId }: EditorCanvasProps) {
   const activePageAnalysis = analysis?.pages.find((p) => p.pageNumber === currentPage);
   const protectedZones = activePageAnalysis?.textBlocks || [];
   const emptyRegions = activePageAnalysis?.emptyRegions || [];
+  const isBlankLineRegion = (region: EmptyRegion) =>
+    region.kind === 'BLANK_LINE' || (region.height <= 3.4 && region.width >= 6);
   const regionContainsOverlay = (region: EmptyRegion) =>
-    pageOverlays.some((overlay) =>
-      overlay.x < region.x + region.width &&
-      overlay.x + overlay.width > region.x &&
-      overlay.y < region.y + region.height &&
-      overlay.y + overlay.height > region.y
-    );
+    pageOverlays.some((overlay) => {
+      const overlapWidth = Math.max(
+        0,
+        Math.min(overlay.x + overlay.width, region.x + region.width) -
+          Math.max(overlay.x, region.x)
+      );
+      const overlapHeight = Math.max(
+        0,
+        Math.min(overlay.y + overlay.height, region.y + region.height) -
+          Math.max(overlay.y, region.y)
+      );
+      const overlapArea = overlapWidth * overlapHeight;
+      const regionArea = region.width * region.height;
+
+      return regionArea > 0 && overlapArea / regionArea > 0.65;
+    });
 
   const startInlineEditing = (region: EmptyRegion) => {
     const overlayId = addOverlay({
@@ -383,6 +395,7 @@ export default function EditorCanvas({ projectId }: EditorCanvasProps) {
               emptyRegions.map((region, i) => {
                 if (regionContainsOverlay(region)) return null;
 
+                const isBlankLine = isBlankLineRegion(region);
                 const x = (region.x / 100) * dimensions.width;
                 const y = (region.y / 100) * dimensions.height;
                 const width = (region.width / 100) * dimensions.width;
@@ -393,28 +406,28 @@ export default function EditorCanvas({ projectId }: EditorCanvasProps) {
                     key={`empty-region-${i}`}
                     onClick={() => startInlineEditing(region)}
                     onTap={() => startInlineEditing(region)}
+                    listening
                   >
                     <Rect
                       x={x}
                       y={y}
                       width={width}
                       height={height}
-                      fill="rgba(16, 185, 129, 0.08)"
-                      stroke="rgba(5, 150, 105, 0.55)"
-                      strokeWidth={1}
-                      dash={[5, 4]}
-                      cornerRadius={3}
+                      fill={isBlankLine ? 'rgba(14, 165, 233, 0.16)' : 'rgba(0, 0, 0, 0.001)'}
+                      stroke={isBlankLine ? 'rgba(2, 132, 199, 0.75)' : 'transparent'}
+                      strokeWidth={isBlankLine ? 1.2 : 0}
+                      cornerRadius={isBlankLine ? 1 : 0}
                     />
-                    <Text
-                      x={x + 4}
-                      y={y + 4}
-                      width={Math.max(0, width - 8)}
-                      text={`Empty space - about ${region.maxCharacters} characters`}
-                      fontSize={Math.max(8, Math.min(11, 9 * zoom))}
-                      fill="#047857"
-                      wrap="none"
-                      ellipsis
-                    />
+                    {isBlankLine && (
+                      <Rect
+                        x={x}
+                        y={y + height - 1.5}
+                        width={width}
+                        height={1.5}
+                        fill="rgba(2, 132, 199, 0.85)"
+                        listening={false}
+                      />
+                    )}
                   </Group>
                 );
               })}

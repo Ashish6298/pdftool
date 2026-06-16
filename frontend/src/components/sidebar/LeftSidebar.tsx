@@ -69,6 +69,8 @@ export default function LeftSidebar() {
   const activePageAnalysis = analysis?.pages.find(p => p.pageNumber === currentPage);
   const suggestions = activePageAnalysis?.suggestedRegions || [];
   const emptyRegions = activePageAnalysis?.emptyRegions || [];
+  const isBlankLineRegion = (region: any) =>
+    region.kind === 'BLANK_LINE' || (region.height <= 3.4 && region.width >= 6);
 
   return (
     <div className="w-64 bg-white border-r border-slate-200 flex flex-col text-slate-705">
@@ -121,16 +123,24 @@ export default function LeftSidebar() {
                 onClick={() => window.dispatchEvent(new CustomEvent('edit-empty-region', {
                   detail: { pageNumber: currentPage, region },
                 }))}
-                className="w-full text-left p-2.5 rounded-lg bg-emerald-50/60 hover:bg-emerald-50 border border-emerald-200 flex items-center space-x-3 transition-all group shadow-sm"
+                className={`w-full text-left p-2.5 rounded-lg border flex items-center space-x-3 transition-all group shadow-sm ${
+                  isBlankLineRegion(region)
+                    ? 'bg-sky-50/70 hover:bg-sky-50 border-sky-200'
+                    : 'bg-emerald-50/60 hover:bg-emerald-50 border-emerald-200'
+                }`}
               >
-                <div className="p-1.5 bg-white rounded-md border border-emerald-150">
-                  <Type className="w-4 h-4 text-emerald-600" />
+                <div className={`p-1.5 bg-white rounded-md border ${
+                  isBlankLineRegion(region) ? 'border-sky-200' : 'border-emerald-200'
+                }`}>
+                  <Type className={`w-4 h-4 ${isBlankLineRegion(region) ? 'text-sky-600' : 'text-emerald-600'}`} />
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="text-xs font-semibold text-slate-700 group-hover:text-slate-900">
-                    Empty text space
+                    {isBlankLineRegion(region) ? 'Fillable blank line' : 'Empty text space'}
                   </div>
-                  <div className="text-[10px] text-emerald-700 font-medium">
+                  <div className={`text-[10px] font-medium ${
+                    isBlankLineRegion(region) ? 'text-sky-700' : 'text-emerald-700'
+                  }`}>
                     About {region.maxCharacters} characters
                   </div>
                 </div>

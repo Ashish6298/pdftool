@@ -89,6 +89,7 @@ export interface EmptyRegion {
   width: number;
   height: number;
   maxCharacters: number;
+  kind?: 'WHITESPACE' | 'BLANK_LINE';
 }
 
 export interface PageAnalysis {
